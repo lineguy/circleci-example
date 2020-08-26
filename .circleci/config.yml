@@ -1,0 +1,100 @@
+version: 2.1
+
+# Define the jobs we want to run for this project
+jobs:
+
+ # Build comtainer
+ build:
+   machine:
+     image: ubuntu-1604:201903-01
+   steps:
+     - checkout
+     - run: 
+         name: Docker Build
+         command: |
+           # Build image based on commit sha
+           docker build --build-arg commit=$CIRCLE_SHA1 -t aturnerbtl/circleci-example:$CIRCLE_SHA1 .
+     - run:
+         name: Docker Push
+         command: |
+           # Login to docker registery
+           echo $DOCKER_TOKEN | docker login --username $DOCKER_USERNAME --password-stdin
+           # Push build to repository
+           docker push aturnerbtl/circleci-example:$CIRCLE_SHA1
+
+ # Test and retag container
+ test:
+   machine:
+     image: ubuntu-1604:201903-01
+   steps:
+     - checkout
+     - run:
+         name: Start Application
+         command: |
+           # Run container
+           docker run -d -p 80:80 --name web aturnerbtl/circleci-example:$CIRCLE_SHA1
+     - run:
+         name: Install Selenium/Browser 
+         command: |
+           # Install selenium on host
+           ./selenium.sh
+     - run:
+         name: Install Python Dependancies
+         command: |
+           pyenv global 3.6.5
+           pip3 install -q pytest
+           pip3 install -q selenium
+     - run:
+         name: Run Tests
+         command: |
+           # Run tests
+           #python tests/button.py
+           mkdir -p test-results
+           pytest --junitxml=test-results/button.xml tests/button.py
+     - run:
+         name: Docker Push
+         command: |
+           # Login to docker registery
+           echo $DOCKER_TOKEN | docker login --username $DOCKER_USERNAME --password-stdin
+           # Retag image to a version number
+           docker image tag aturnerbtl/circleci-example:$CIRCLE_SHA1 aturnerbtl/circleci-example:0.1.$CIRCLE_BUILD_NUM
+           docker image tag aturnerbtl/circleci-example:$CIRCLE_SHA1 aturnerbtl/circleci-example:latest
+           # Upload Image
+           docker push aturnerbtl/circleci-example:0.1.$CIRCLE_BUILD_NUM
+           docker push aturnerbtl/circleci-example:latest
+     - store_test_results:
+         path: test-results
+     - store_artifacts:
+         path: test-results
+
+ # Deploy container
+ deploy:
+   docker:
+     - image: ubuntu:18.04
+   steps:
+     - add_ssh_keys:
+          fingerprints:
+            - "c5:90:15:4e:f7:01:47:98:7f:f3:fa:ee:93:7e:f0:c9"
+     - run:
+         name: Install Depenancies
+         command: |
+           # Install openssh-client
+           apt update -y -qq
+           apt install -y -qq openssh-client
+     - run:
+         name: Deploy
+         command: |
+           # Login to deployment server and run deployment script
+           ssh deploy@165.232.110.245 -p 3023 -oStrictHostKeyChecking=no "deploy-container aturnerbtl/circleci-example:latest"
+
+# Orchestrate our job run sequence
+workflows:
+  build-test-and-deploy:
+    jobs:
+      - build
+      - test:
+          requires:
+            - build
+      - deploy:
+          requires:
+            - test
